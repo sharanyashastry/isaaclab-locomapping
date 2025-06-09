@@ -54,8 +54,11 @@ x-default-isaac-lab-volumes: &default-isaac-lab-volumes
   - type: volume
     source: isaac-lab-docs
     target: ${DOCKER_ISAACLAB_PATH}/docs/_build
-  - type: volume
-    source: isaac-lab-logs
+  # - type: volume
+  #   source: isaac-lab-logs
+  #   target: ${DOCKER_ISAACLAB_PATH}/logs
+  - type: bind
+    source: ./artifacts/logs
     target: ${DOCKER_ISAACLAB_PATH}/logs
   - type: volume
     source: isaac-lab-data
@@ -97,6 +100,9 @@ services:
     entrypoint: bash
     stdin_open: true
     tty: true
+    devices:
+      - /dev/input/js0:/dev/input/js0
+      - /dev/input/event8:/dev/input/event8
 
   # This service adds a ROS2 Humble
   # installation on top of the base image
