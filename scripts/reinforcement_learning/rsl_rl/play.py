@@ -14,6 +14,9 @@ from isaaclab.app import AppLauncher
 # local imports
 import cli_args  # isort: skip
 
+# Teleop imports
+import pygame
+
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
@@ -29,6 +32,12 @@ parser.add_argument(
     help="Use the pre-trained checkpoint from Nucleus.",
 )
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
+parser.add_argument(
+    "--teleop",
+    action="store_true",
+    default=False,
+    help="If set, read from joystick for teleop instead of using the predetermined velocity targets.",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -89,6 +98,9 @@ def main():
     log_dir = os.path.dirname(resume_path)
 
     # create isaac environment
+    # env_cfg.scene.terrain.debug_vis = False
+    # print("terrain type is", env_cfg.scene.terrain.terrain_type)
+    print("terrain generator values are ", env_cfg.scene.terrain.terrain_generator)
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
 
     # convert to single-agent instance if required by the RL algorithm
@@ -139,15 +151,47 @@ def main():
     # reset environment
     obs, _ = env.get_observations()
     timestep = 0
+
+    pygame.init()
+
+    count = pygame.joystick.get_count()
+    print(f"[JOYSTICK] Detected {count} device(s).")
+
+    if (count != 1):
+        raise RuntimeError("Please connect exactly one controller")
+    joystick = pygame.joystick.Joystick(0)
+    joystick.init()
+
     # simulate environment
     while simulation_app.is_running():
         start_time = time.time()
-        # run everything in inference mode
-        with torch.inference_mode():
-            # agent stepping
-            actions = policy(obs)
-            # env stepping
+        # Poll pygame events so joystick state updates
+        if args_cli.teleop:
+            frame_start = time.time()
+            pygame.event.pump()
+            term = env.unwrapped.command_manager.get_term("base_velocity")  # UniformVelocityCommand
+
+            # scale joystick commands
+            vx = 1.5 * (-joystick.get_axis(1))   # forward/back
+            vy = 1.5 * ( joystick.get_axis(0))   # left/right
+            wz = 1.2 * ( -joystick.get_axis(2))   # yaw rate
+
+            # write directly into the term’s tensor (shape = [N, 3])
+            term.command[:] = torch.tensor([vx, vy, wz],
+                                        dtype=torch.float32, device=env.unwrapped.device).repeat(env.num_envs, 1)
+
+            # fresh obs now contains the new [vx,vy,wz]
+            obs, _ = env.get_observations()
+
+            with torch.inference_mode():
+                actions = policy(obs)
             obs, _, _, _ = env.step(actions)
+        else:
+            with torch.inference_mode():
+                # agent stepping
+                actions = policy(obs)
+                # env stepping
+                obs, _, _, _ = env.step(actions)
         if args_cli.video:
             timestep += 1
             # Exit the play loop after recording one video
