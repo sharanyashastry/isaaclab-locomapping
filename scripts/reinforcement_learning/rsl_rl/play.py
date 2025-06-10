@@ -72,6 +72,110 @@ from isaaclab_tasks.utils import get_checkpoint_path, parse_env_cfg
 
 # PLACEHOLDER: Extension template (do not remove this comment)
 
+def customize_env(env_cfg):
+    """This function overrides the settings in SpotFlatEnvCfg with customizations. """
+    import isaaclab.terrains as terrain_gen
+    # print("terrain generator values are ", env_cfg.scene.terrain.terrain_generator)
+    tg = env_cfg.scene.terrain.terrain_generator
+    # Changing terrain sizing (The documentation says this is in meters)
+    # Either this is not in meters or the other stuff is not in meters.
+    tg.size = (1.0, 1.0)
+    tg.num_rows = 2
+    tg.num_cols = 2
+
+    # turn the generator into a pure flat-plane creator
+    tg.terrain_type      = "flat"
+    tg.class_type        = "flat"        # older builds use this key
+    tg.sub_terrains      = {"flat": terrain_gen.MeshPlaneTerrainCfg(proportion=1.0, size=tg.size )}
+
+    # Drop the "time_out" termination so that the robot doesn't get reset every 20 s
+    env_cfg.terminations.time_out = None
+    env_cfg.is_finite_horizon = False            # tell the wrapper it's now infinite-horizon
+
+    # Change init position of robot
+    # env_cfg.scene.robot.init_state.pos = (0, 5.0, 0.9)
+    # This is not in the environment frame. This is likely the base position in the body frame.
+    # print("Robot position:", env_cfg.scene.robot.init_state.pos)
+    # breakpoint()
+
+import random
+import math
+from isaacsim.core.utils import prims            # USD helpers
+from isaaclab.sim import (
+    ConeCfg, MeshCuboidCfg,
+    RigidBodyPropertiesCfg, MassPropertiesCfg,
+    CollisionPropertiesCfg, PreviewSurfaceCfg,
+)
+
+def add_random_props(
+    num_cones=10,
+    num_cuboids=15,
+    xy_range=(-10.0, 10.0),    # unsure if this is in meters
+    height_above_ground=0.5, # spawn height fixed
+    cone_radius=(0.2, 0.5),
+    cone_height=(0.6, 1.2),
+    cuboid_size=((0.2, 0.4), (0.2, 0.6), (0.2, 0.4))
+):
+    """
+    Sprinkles random cones and cuboids under /World/envs/env_0.
+    Must be called immediately after `env = gym.make(...)` and before any `env.step()`.
+    """
+    ENV0 = "/World/envs/env_0"
+    prims.create_prim(f"{ENV0}/Props", "Xform")
+
+    # color palette
+    palette = [
+        (1.0, 0.4, 0.4),
+        (0.4, 1.0, 0.4),
+        (0.4, 0.6, 1.0),
+        (1.0, 0.65, 0.0),
+        (0.8, 0.2, 1.0),
+    ]
+
+    def rand_xy():
+        return (random.uniform(*xy_range),
+                random.uniform(*xy_range))
+
+    # spawn cones
+    for i in range(num_cones):
+        r   = random.uniform(*cone_radius)
+        h   = random.uniform(*cone_height)
+        x,y = rand_xy()
+        yaw = random.uniform(-math.pi, math.pi)
+        cfg = ConeCfg(
+            radius=r, height=h,
+            rigid_props   = RigidBodyPropertiesCfg(),
+            mass_props    = MassPropertiesCfg(mass=1.0),
+            collision_props = CollisionPropertiesCfg(),
+            visual_material = PreviewSurfaceCfg(diffuse_color=random.choice(palette)),
+        )
+        cfg.func(
+            f"{ENV0}/Props/Cone_{i}",
+            cfg,
+            translation=(x, y, height_above_ground),
+            orientation=(math.cos(yaw/2), 0, 0, math.sin(yaw/2))
+        )
+
+    # spawn cuboids
+    for i in range(num_cuboids):
+        sx = random.uniform(*cuboid_size[0])
+        sy = random.uniform(*cuboid_size[1])
+        sz = random.uniform(*cuboid_size[2])
+        x,y = rand_xy()
+        yaw = random.uniform(-math.pi, math.pi)
+        cfg = MeshCuboidCfg(
+            size=(sx, sy, sz),
+            rigid_props   = RigidBodyPropertiesCfg(),
+            mass_props    = MassPropertiesCfg(mass=1.0),
+            collision_props = CollisionPropertiesCfg(),
+            visual_material = PreviewSurfaceCfg(diffuse_color=random.choice(palette)),
+        )
+        cfg.func(
+            f"{ENV0}/Props/Cuboid_{i}",
+            cfg,
+            translation=(x, y, height_above_ground),
+            orientation=(math.cos(yaw/2), 0, 0, math.sin(yaw/2))
+        )
 
 def main():
     """Play with RSL-RL agent."""
@@ -98,9 +202,10 @@ def main():
     log_dir = os.path.dirname(resume_path)
 
     # create isaac environment
-    # env_cfg.scene.terrain.debug_vis = False
-    # print("terrain type is", env_cfg.scene.terrain.terrain_type)
-    print("terrain generator values are ", env_cfg.scene.terrain.terrain_generator)
+    # WARNING: THESE IMPORTS HAVE TO STAY BEFORE THE gym.make but before the env.step to prevent errors.
+    # Imports to add objects into the scene
+    customize_env(env_cfg)
+    add_random_props()
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
 
     # convert to single-agent instance if required by the RL algorithm
@@ -167,14 +272,16 @@ def main():
         start_time = time.time()
         # Poll pygame events so joystick state updates
         if args_cli.teleop:
-            frame_start = time.time()
             pygame.event.pump()
             term = env.unwrapped.command_manager.get_term("base_velocity")  # UniformVelocityCommand
 
             # scale joystick commands
-            vx = 1.5 * (-joystick.get_axis(1))   # forward/back
-            vy = 1.5 * ( joystick.get_axis(0))   # left/right
-            wz = 1.2 * ( -joystick.get_axis(2))   # yaw rate
+            lin_x_scaling = 3.0
+            lin_y_scaling = 3.0
+            ang_w_scaling = 2.0
+            vx = lin_x_scaling * (-joystick.get_axis(1))   # forward/back (1.5)
+            vy = lin_y_scaling * ( joystick.get_axis(0))   # left/right (1.5)
+            wz = ang_w_scaling * ( -joystick.get_axis(2))   # yaw rate (1.2)
 
             # write directly into the term’s tensor (shape = [N, 3])
             term.command[:] = torch.tensor([vx, vy, wz],
