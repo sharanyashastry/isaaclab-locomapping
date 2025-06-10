@@ -7,6 +7,7 @@ import math
 from dataclasses import MISSING
 
 import isaaclab.sim as sim_utils
+from isaaclab.sensors import CameraCfg
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.managers import CurriculumTermCfg as CurrTerm
@@ -78,6 +79,25 @@ class MySceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DomeLightCfg(
             intensity=750.0,
             texture_file=f"{ISAAC_NUCLEUS_DIR}/Materials/Textures/Skies/PolyHaven/kloofendal_43d_clear_puresky_4k.hdr",
+        ),
+    )
+    
+    camera = CameraCfg(
+        prim_path     = "{ENV_REGEX_NS}/Robot/body/front_cam",
+        update_period = 0.05,     # 20 Hz
+        height        = 480,
+        width         = 640,
+        data_types    = ["rgb", "distance_to_image_plane"],
+        spawn         = sim_utils.PinholeCameraCfg(
+            focal_length        = 24.0,
+            focus_distance      = 400.0,
+            horizontal_aperture = 20.955,
+            clipping_range      = (0.1, 1000.0),
+        ),
+        offset        = CameraCfg.OffsetCfg(
+            pos        = (0.3, 0.0, 0.2),  # 30 cm forward, 20 cm up
+            rot        = (0.5, -0.5, 0.5, -0.5),
+            convention = "ros",
         ),
     )
 
